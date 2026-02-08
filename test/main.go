@@ -2,18 +2,19 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/beyondbrewing/brewery-bitcoin/pkg/btcclient"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
-func testnet(cfg *btcclient.Config) {
-	cfg.ChainParams = &chaincfg.SigNetParams
-}
-
 func main() {
+	btx, err := btcclient.NewBtcClient(
+		btcclient.WithChainParams(&chaincfg.SigNetParams),
+	)
+	if err != nil {
+		log.Fatalf("failed to create client: %v", err)
+	}
 
-	btx := btcclient.NewBtcClient()
 	fmt.Printf("%+v\n", btx)
-
 }
