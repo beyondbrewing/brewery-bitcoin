@@ -1,4 +1,4 @@
-package btclient
+package btcclient
 
 import (
 	"context"
@@ -363,4 +363,56 @@ func (pm *PeerManager) performHealthChecks() {
 		managedPeer.lastcheck = time.Now()
 		managedPeer.mu.Unlock()
 	}
+}
+
+func (bc *BtcClient) Start(ctx context.Context) error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+	if bc.manager.started.Load() {
+		return fmt.Errorf("client already started")
+	}
+
+	bc.manager.started.Store(true)
+
+	bc.manager.wg.Add(1)
+	go bc.manager.HealthCheckLoop()
+
+	log.Println("[PEER] client started")
+	return nil
+}
+
+func (bc *BtcClient) Stop(ctx context.Context) error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	if !bc.manager.started.Load() {
+		return fmt.Errorf("Client not loaded")
+	}
+
+	close(bc.manager.done)
+
+	bc.manager.peersMu.Lock()
+	for _, managedPeer := range bc.manager.peers {
+		managedPeer.cancel()
+		if managedPeer.peer != nil {
+			managedPeer.peer.Disconnect()
+		}
+	}
+
+	bc.manager.peersMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		bc.manager.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("[CLIENT] stopped gracefully")
+	case <-ctx.Done():
+		return fmt.Errorf("stop timeout exceeded")
+	}
+	bc.manager.started.Store(false)
+	return nil
 }
