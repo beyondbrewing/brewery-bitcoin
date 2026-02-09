@@ -17,7 +17,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := indexer.StartIndexer(ctx); err != nil {
+	if err := indexer.Start(ctx); err != nil {
 		logger.Fatal("indexer error", "error", err)
 	}
 }

@@ -131,7 +131,7 @@ func requestHeaders(mp *btcclient.ManagedPeer, fromHash *chainhash.Hash) {
 }
 
 func main() {
-	log := logger.MustDevelopment()
+	log := logger.MustProduction()
 
 	params := &chaincfg.SigNetParams
 	idx := newHeaderIndexer(params, log)
