@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beyondbrewing/brewery-bitcoin/pkg/logger"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
@@ -18,6 +19,8 @@ type Config struct {
 	ConnectionTimeout   time.Duration
 
 	Listeners *MessageListeners
+
+	Logger logger.Logger
 }
 
 // Option is a functional option for configuring a BtcClient.
@@ -95,4 +98,10 @@ func WithConnectionTimeout(d time.Duration) Option {
 // WithListeners sets the message listener callbacks.
 func WithListeners(l *MessageListeners) Option {
 	return func(c *Config) { c.Listeners = l }
+}
+
+// WithLogger sets a custom logger for the client.
+// If not set, the global logger.Default() is used.
+func WithLogger(l logger.Logger) Option {
+	return func(c *Config) { c.Logger = l }
 }

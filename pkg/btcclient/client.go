@@ -2,15 +2,16 @@ package btcclient
 
 import (
 	"context"
-	"log/slog"
 	"sync"
+
+	"github.com/beyondbrewing/brewery-bitcoin/pkg/logger"
 )
 
 // BtcClient is the top-level entry point for managing Bitcoin P2P connections.
 type BtcClient struct {
 	manager *PeerManager
 	mu      sync.RWMutex
-	logger  *slog.Logger
+	logger  logger.Logger
 }
 
 // NewBtcClient creates a new client with the given functional options applied
@@ -25,11 +26,15 @@ func NewBtcClient(opts ...Option) (*BtcClient, error) {
 		return nil, err
 	}
 
-	logger := slog.Default().With("component", "btcclient")
+	log := cfg.Logger
+	if log == nil {
+		log = logger.Default()
+	}
+	log = log.With("component", "btcclient")
 
 	return &BtcClient{
-		manager: newPeerManager(cfg, logger),
-		logger:  logger,
+		manager: newPeerManager(cfg, log),
+		logger:  log,
 	}, nil
 }
 

@@ -3,32 +3,31 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"time"
 
 	"github.com/beyondbrewing/brewery-bitcoin/pkg/btcclient"
+	"github.com/beyondbrewing/brewery-bitcoin/pkg/logger"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	log := logger.MustDevelopment()
 
 	params := &chaincfg.MainNetParams
 
 	client, err := btcclient.NewBtcClient(
 		btcclient.WithChainParams(params),
 		btcclient.WithMaxPeers(1),
+		btcclient.WithLogger(log),
 		btcclient.WithListeners(&btcclient.MessageListeners{
 			OnPeerConnected: func(mp *btcclient.ManagedPeer) {
-				logger.Info("connected to peer", "address", mp.Address())
+				log.Info("connected to peer", "address", mp.Address())
 			},
 			OnAddr: func(mp *btcclient.ManagedPeer, msg *wire.MsgAddr) {
-				logger.Info("received peer addresses",
+				log.Info("received peer addresses",
 					"count", len(msg.AddrList),
 					"from", mp.Address(),
 				)
@@ -43,42 +42,37 @@ func main() {
 				}
 			},
 			OnPeerDisconnected: func(mp *btcclient.ManagedPeer) {
-				logger.Info("peer disconnected", "address", mp.Address())
+				log.Info("peer disconnected", "address", mp.Address())
 			},
 		}),
 	)
 	if err != nil {
-		logger.Error("failed to create client", "error", err)
-		os.Exit(1)
+		log.Fatal("failed to create client", "error", err)
 	}
 
 	if err := client.Start(); err != nil {
-		logger.Error("failed to start client", "error", err)
-		os.Exit(1)
+		log.Fatal("failed to start client", "error", err)
 	}
 
 	ctx := context.Background()
 
 	if err := client.AddPeer(ctx, "seed.bitcoin.sipa.be:8333"); err != nil {
-		logger.Error("failed to add seed peer", "error", err)
-		os.Exit(1)
+		log.Fatal("failed to add seed peer", "error", err)
 	}
 
-	logger.Info("requesting peers from seed node", "network", params.Name)
-
-	// Periodically request peers from all connected nodes.
+	log.Info("requesting peers from seed node", "network", params.Name)
 
 	// Wait for interrupt.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	<-sig
 
-	logger.Info("shutting down")
+	log.Info("shutting down")
 
 	stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	if err := client.Stop(stopCtx); err != nil {
-		logger.Error("shutdown error", "error", err)
+		log.Error("shutdown error", "error", err)
 	}
 }
