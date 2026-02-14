@@ -3,13 +3,13 @@ package btcclient
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/beyondbrewing/brewery-bitcoin/config"
+	"github.com/beyondbrewing/brewery-bitcoin/pkg/logger"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/peer"
 	"github.com/btcsuite/btcd/wire"
@@ -23,7 +23,7 @@ type PeerManager struct {
 	done        chan struct{}
 	wg          sync.WaitGroup
 	started     atomic.Bool
-	logger      *slog.Logger
+	logger      logger.Logger
 
 	maxPeers            int
 	maxFailureCount     int32
@@ -35,12 +35,12 @@ type PeerManager struct {
 }
 
 // newPeerManager creates a PeerManager from a validated Config.
-func newPeerManager(cfg *Config, logger *slog.Logger) *PeerManager {
+func newPeerManager(cfg *Config, l logger.Logger) *PeerManager {
 	return &PeerManager{
 		chainParams:         cfg.ChainParams,
 		peers:               make(map[string]*ManagedPeer),
 		done:                make(chan struct{}),
-		logger:              logger,
+		logger:              l,
 		maxPeers:            cfg.MaxPeers,
 		maxFailureCount:     cfg.MaxFailureCount,
 		healthCheckInterval: cfg.HealthCheckInterval,
@@ -118,6 +118,12 @@ func (pm *PeerManager) connectionLoop(mp *ManagedPeer) {
 			log.Warn("connection attempt failed", "error", err)
 			mp.setStatus(PeerStatusDisconnected)
 			mp.incrementFailure()
+
+			if mp.FailureCount() >= pm.maxFailureCount {
+				log.Warn("evicting peer: failure threshold exceeded", "failures", mp.FailureCount())
+				pm.evictPeer(mp)
+				return
+			}
 
 			if !pm.waitOrCancel(mp.ctx, pm.reconnectDelay) {
 				return
@@ -201,22 +207,35 @@ func (pm *PeerManager) healthCheckLoop() {
 	}
 }
 
-// runHealthChecks iterates over all peers and marks unhealthy ones.
+// runHealthChecks iterates over all peers and removes those that exceeded
+// the configured failure threshold.
 func (pm *PeerManager) runHealthChecks() {
-	pm.peersMu.RLock()
-	defer pm.peersMu.RUnlock()
+	pm.peersMu.Lock()
+	defer pm.peersMu.Unlock()
 
-	for _, mp := range pm.peers {
-		failures := mp.FailureCount()
-
-		if failures >= pm.maxFailureCount && mp.Status() != PeerStatusUnhealthy {
-			pm.logger.Warn("peer marked unhealthy",
-				"peer", mp.address,
-				"failures", failures,
-			)
-			mp.setStatus(PeerStatusUnhealthy)
+	var toRemove []string
+	for addr, mp := range pm.peers {
+		fmt.Println(">>>>", addr, ">>>", mp.FailureCount())
+		if mp.FailureCount() >= pm.maxFailureCount {
+			toRemove = append(toRemove, addr)
 		}
 	}
+
+	for _, addr := range toRemove {
+		pm.logger.Warn("removing unhealthy peer",
+			"peer", addr,
+			"failures", pm.peers[addr].FailureCount(),
+		)
+		pm.removePeer(addr)
+	}
+}
+
+// evictPeer acquires a write lock and removes the peer.
+// Safe to call from the peer's own connectionLoop.
+func (pm *PeerManager) evictPeer(mp *ManagedPeer) {
+	pm.peersMu.Lock()
+	defer pm.peersMu.Unlock()
+	pm.removePeer(mp.address)
 }
 
 // isStopping returns true if the manager's done channel has been closed.

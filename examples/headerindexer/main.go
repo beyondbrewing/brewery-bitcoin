@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"time"
 
 	"github.com/beyondbrewing/brewery-bitcoin/pkg/btcclient"
+	"github.com/beyondbrewing/brewery-bitcoin/pkg/logger"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -19,15 +19,16 @@ type headerIndexer struct {
 	mu      sync.Mutex
 	headers []wire.BlockHeader
 	tipHash *chainhash.Hash
+	synced  bool
 	params  *chaincfg.Params
-	logger  *slog.Logger
+	logger  logger.Logger
 }
 
-func newHeaderIndexer(params *chaincfg.Params, logger *slog.Logger) *headerIndexer {
+func newHeaderIndexer(params *chaincfg.Params, log logger.Logger) *headerIndexer {
 	return &headerIndexer{
 		tipHash: params.GenesisHash,
 		params:  params,
-		logger:  logger,
+		logger:  log,
 	}
 }
 
@@ -76,8 +77,44 @@ func (idx *headerIndexer) onHeaders(mp *btcclient.ManagedPeer, msg *wire.MsgHead
 	if len(msg.Headers) == 2000 {
 		requestHeaders(mp, tip)
 	} else {
-		idx.logger.Info("header sync complete", "height", newHeight)
+		idx.mu.Lock()
+		wasSynced := idx.synced
+		idx.synced = true
+		idx.mu.Unlock()
+
+		if !wasSynced {
+			idx.logger.Info("initial header sync complete, listening for new blocks", "height", newHeight)
+		} else {
+			idx.logger.Info("new headers indexed", "height", newHeight, "tip", tip.String())
+		}
 	}
+}
+
+// onInv handles inventory announcements. When a peer advertises new blocks,
+// request the headers starting from our current tip.
+func (idx *headerIndexer) onInv(mp *btcclient.ManagedPeer, msg *wire.MsgInv) {
+	hasBlock := false
+	for _, iv := range msg.InvList {
+		if iv.Type == wire.InvTypeBlock || iv.Type == wire.InvTypeWitnessBlock {
+			hasBlock = true
+			break
+		}
+	}
+	if !hasBlock {
+		return
+	}
+
+	idx.mu.Lock()
+	tip := idx.tipHash
+	synced := idx.synced
+	idx.mu.Unlock()
+
+	if !synced {
+		return
+	}
+
+	idx.logger.Info("new block announced, requesting headers", "peer", mp.Address())
+	requestHeaders(mp, tip)
 }
 
 // requestHeaders sends a getheaders message starting from the given hash.
@@ -94,21 +131,21 @@ func requestHeaders(mp *btcclient.ManagedPeer, fromHash *chainhash.Hash) {
 }
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	log := logger.MustProduction()
 
 	params := &chaincfg.SigNetParams
-	idx := newHeaderIndexer(params, logger)
+	idx := newHeaderIndexer(params, log)
 
 	client, err := btcclient.NewBtcClient(
 		btcclient.WithChainParams(params),
 		btcclient.WithMaxPeers(8),
+		btcclient.WithLogger(log),
 		btcclient.WithListeners(&btcclient.MessageListeners{
 			OnHeaders:       idx.onHeaders,
 			OnPeerConnected: idx.onPeerConnected,
+			OnInv:           idx.onInv,
 			OnAddr: func(mp *btcclient.ManagedPeer, msg *wire.MsgAddr) {
-				logger.Info("received peer addresses",
+				log.Info("received peer addresses",
 					"count", len(msg.AddrList),
 					"from", mp.Address(),
 				)
@@ -116,39 +153,40 @@ func main() {
 		}),
 	)
 	if err != nil {
-		logger.Error("failed to create client", "error", err)
-		os.Exit(1)
+		log.Fatal("failed to create client", "error", err)
 	}
 
 	if err := client.Start(); err != nil {
-		logger.Error("failed to start client", "error", err)
-		os.Exit(1)
+		log.Fatal("failed to start client", "error", err)
 	}
 
 	ctx := context.Background()
 
-	// Seed peer for signet.
-	if err := client.AddPeer(ctx, "seed.signet.bitcoin.sprovoost.nl:38333"); err != nil {
-		logger.Error("failed to add seed peer", "error", err)
-		os.Exit(1)
+	// Seed peers for signet.
+	seedPeers := []string{
+		"seed.signet.bitcoin.sprovoost.nl:38333",
+		"seed.signet.achow101.com:38333",
+		"seed.signet.bublina.eu.org:38333",
+	}
+	for _, addr := range seedPeers {
+		if err := client.AddPeer(ctx, addr); err != nil {
+			log.Fatal("failed to add seed peer", "error", err, "addr", addr)
+		}
 	}
 
-	logger.Info("header indexer started", "network", params.Name)
-	go func(c *btcclient.BtcClient) {
+	log.Info("header indexer started", "network", params.Name)
 
-	}(client)
 	// Wait for interrupt.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	<-sig
 
-	logger.Info("shutting down", "height", idx.height())
+	log.Info("shutting down", "height", idx.height())
 
 	stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	if err := client.Stop(stopCtx); err != nil {
-		logger.Error("shutdown error", "error", err)
+		log.Error("shutdown error", "error", err)
 	}
-
 }
