@@ -67,7 +67,9 @@ func (c *Config) validate() error {
 
 // WithChainParams sets the Bitcoin network parameters.
 func WithChainParams(params *chaincfg.Params) Option {
-	return func(c *Config) { c.ChainParams = params }
+	return func(c *Config) {
+		c.ChainParams = params
+	}
 }
 
 // WithMaxPeers sets the maximum number of concurrent peers.

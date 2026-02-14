@@ -10,9 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beyondbrewing/brewery-bitcoin/db"
 	"github.com/beyondbrewing/brewery-bitcoin/pkg/btcclient"
 	"github.com/beyondbrewing/brewery-bitcoin/pkg/logger"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 )
 
 // Sentinel errors for the indexer package.
@@ -43,6 +46,9 @@ type Config struct {
 
 	// Logger is the structured logger. Falls back to logger.Default() if nil.
 	Logger logger.Logger
+
+	// Stores is a pointer to pebel db as a dependency injection that will be used for storage purpose
+	Store *db.PebbleDB
 }
 
 // Option is a functional option for configuring an Indexer.
@@ -95,6 +101,10 @@ func WithMaxPeers(n int) Option {
 	return func(c *Config) { c.MaxPeers = n }
 }
 
+func WithDb(d *db.PebbleDB) Option {
+	return func(c *Config) { c.Store = d }
+}
+
 // WithPeers sets explicit peer addresses to connect to.
 func WithPeers(addrs ...string) Option {
 	return func(c *Config) { c.Peers = addrs }
@@ -122,7 +132,11 @@ type Indexer struct {
 	logger logger.Logger
 
 	mu      sync.Mutex
+	tipHash *chainhash.Hash
+	headers []wire.BlockHeader // NOTE : replace with RocksDB
+
 	running bool
+	synced  bool
 }
 
 // New creates an Indexer with the given options applied over DefaultConfig.
@@ -153,9 +167,10 @@ func New(opts ...Option) (*Indexer, error) {
 	}
 
 	return &Indexer{
-		cfg:    cfg,
-		client: client,
-		logger: log,
+		cfg:     cfg,
+		client:  client,
+		logger:  log,
+		tipHash: cfg.ChainParams.GenesisHash, // read from database needed to be added here
 	}, nil
 }
 
